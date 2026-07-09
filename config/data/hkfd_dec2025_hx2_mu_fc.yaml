@@ -1,0 +1,3 @@
+defaults:
+  - dataset: hkfd_dec2025_hx2
+split_path: /hx2-weka/home/np106/data/HKFD_Dec2025/HKFD_mu_fc_split_indices.npz

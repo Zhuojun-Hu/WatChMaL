@@ -1,0 +1,12 @@
+engine:
+  target_key:
+    - three_momenta
+model:
+  num_output_channels: 3
+tasks:
+  train:
+    loss:
+      delta: 1
+  evaluate:
+    loss:
+      delta: 1 

@@ -95,13 +95,19 @@ def main_worker_function(rank, config, hydra_config=None):
 
     log.info(f"Running main worker function rank {rank} on device: {device}")
 
-    # Instantiate model and engine
-    model = instantiate(config.model).to(device)
-
-    # Configure the device to be used for model training and inference
+    # Instantiate model and connfigure distributed training
+    model_config = config.model
+    with open_dict(model_config):
+        convert_sync_batchnorm = model_config.pop("convert_sync_batchnorm", is_distributed)
+        if config.engine.get("channels_last", False):
+            model = instantiate(model_config).to(device, memory_format=torch.channels_last)
+        else:
+            model = instantiate(model_config).to(device)
+    if is_distributed and convert_sync_batchnorm:
+            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    if config.get("compile", False):
+        model.compile()
     if is_distributed:
-        # Convert model batch norms to synchbatchnorm
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[device])
 
     # Instantiate the engine

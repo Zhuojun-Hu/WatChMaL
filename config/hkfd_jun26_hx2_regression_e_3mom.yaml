@@ -1,0 +1,4 @@
+defaults:
+  - hkfd_jun26_regression  # Best regression config as of June 2026
+  - hkfd_hx2_e_fc          # e- fully contained data
+  - hkfd_3mom              # 3-momentum target

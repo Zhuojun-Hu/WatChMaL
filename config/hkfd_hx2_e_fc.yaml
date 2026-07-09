@@ -1,0 +1,6 @@
+defaults:
+  - data: hkfd_dec2025_hx2_e_fc
+tasks:
+  train:
+    scheduler:
+      T_max: 450390

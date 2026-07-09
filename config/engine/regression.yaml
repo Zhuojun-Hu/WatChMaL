@@ -1,2 +1,3 @@
 _target_: watchmal.engine.regression.RegressionEngine
-target_key: 'positions'
+target_key: positions
+channels_last: True

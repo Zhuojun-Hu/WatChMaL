@@ -1,0 +1,19 @@
+defaults:
+  - /optimizers: adamW2D
+  - /scheduler: cosinelr
+  - /loss: huber_hkfd
+  - /data_loaders:
+    - train
+    - validation
+scheduler:
+  eta_min: 1.0e-06
+data_loaders:
+  train:
+    batch_size: 512
+    pre_transforms: null
+  validation:
+    batch_size: 4096
+num_val_batches: 48
+val_interval: 400
+epochs: 30
+checkpointing: false

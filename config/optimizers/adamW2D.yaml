@@ -1,0 +1,4 @@
+_target_: watchmal.optimizer.AdamW2D.AdamW2D
+lr: 0.01
+weight_decay: 0.005
+

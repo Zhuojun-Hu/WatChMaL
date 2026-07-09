@@ -1,0 +1,16 @@
+defaults:
+  - model: resnet152_hkfd
+  - engine: regression
+  - tasks/train: train_hkfd
+  - tasks/restore_best_state: restore_best_state
+  - tasks/evaluate: test_hkfd
+  - _self_
+amp: false #bf16
+gpu_list: [0, 1, 2, 3]
+seed: null
+dump_path: './outputs/'
+hydra:
+  run:
+    dir: ./outputs/${hydra.job.config_name}/${hydra.job.override_dirname}/${now:%Y-%m-%d}_${now:%H-%M-%S.%f}
+  job:
+    chdir: True

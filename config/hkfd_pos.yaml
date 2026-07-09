@@ -1,0 +1,5 @@
+engine:
+  target_key:
+    - positions
+model:
+  num_output_channels: 3

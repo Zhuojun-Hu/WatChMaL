@@ -1,0 +1,7 @@
+defaults:
+  - resnet152
+num_input_channels: 5
+conv_pad_mode: zeros
+first_kernel_size: 4
+first_stride: 2
+shift_inv_channels: [0]

@@ -30,6 +30,13 @@ class ShiftInvariantConv2d(nn.Conv2d):
         return self._conv_forward(x, w, self.bias)
 
 
+class CircularPad2d(nn.Module):
+    """Explicit circular padding with a fast path for 1-pixel symmetric padding."""
+    def forward(self, x):
+        x = torch.cat((x[..., -1:], x, x[..., :1]), dim=-1)
+        return torch.cat((x[..., -1:, :], x, x[..., :1, :]), dim=-2)
+
+
 def conv1x1(in_planes, out_planes, stride=1):
     """1x1 convolution"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
@@ -37,6 +44,8 @@ def conv1x1(in_planes, out_planes, stride=1):
 
 def conv3x3(in_planes, out_planes, stride=1, padding_mode='zeros'):
     """3x3 convolution with padding"""
+    if padding_mode == 'circular':
+        return nn.Sequential(CircularPad2d((1,1,1,1)), nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=0, bias=False))
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False, padding_mode=padding_mode)
 
 
@@ -114,7 +123,7 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_input_channels, num_output_channels, zero_init_residual=False,
                  first_kernel_size=1, first_stride=1, shift_inv_channels=None, conv_pad_mode='zeros',
-                 group_norm=False, n_groups=32):
+                 group_norm=False, n_groups=32, first_conv_pad_mode=None):
         if group_norm:
             class GroupNorm(nn.GroupNorm):
                 def __init__(self, num_channels):
@@ -129,7 +138,15 @@ class ResNet(nn.Module):
 
         pad_l = first_kernel_size // 2
         pad_r = first_kernel_size - 1 - pad_l
-        self.pad1 = lambda x: F.pad(x, (pad_l, pad_r, pad_l, pad_r), mode="constant" if conv_pad_mode == "zeros" else conv_pad_mode)
+        if first_conv_pad_mode is None:
+            first_conv_pad_mode = conv_pad_mode
+        if conv_pad_mode == 'circular':
+            self.pad1 = CircularPad2d((pad_l, pad_r, pad_l, pad_r))
+        else:
+            if first_conv_pad_mode == "zeros": 
+                first_conv_pad_mode = "constant"
+            self.pad1 = lambda x: F.pad(x, (pad_l, pad_r, pad_l, pad_r), mode=first_conv_pad_mode)
+
         if shift_inv_channels is None:
             self.conv1 = nn.Conv2d(num_input_channels, 64, kernel_size=first_kernel_size, stride=first_stride, padding=0, bias=False)
         else:

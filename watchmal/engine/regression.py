@@ -22,16 +22,19 @@ metric_functions = {
     'angles':  # mean angle between directions
         lambda x, y: {'direction error': torch.mean(torch.arccos(torch.cos(x[:, 0])*torch.cos(y[:, 0])
                                                 + torch.sin(x[:, 0])*torch.sin(y[:, 0])*torch.cos(x[:, 1]-y[:, 1])))},
-    'energies':  # mean fractional error
+    'energies':  # mean fractional error and bias
         lambda x, y: {'energy bias': torch.mean((x - y) / y),
                       'energy error': torch.mean(torch.abs(x-y)/y)},
     'three_momenta':  three_momenta_metrics,
+    'log_momenta': # mean fractional error and bias
+        lambda x, y: {'momentum bias': torch.mean(torch.exp(x-y) - 1.0),
+                      'momentum error': torch.mean(torch.abs(torch.exp(x-y) - 1.0))},
 }
 
 
 class RegressionEngine(ReconstructionEngine):
     """Engine for performing training or evaluation for a regression network."""
-    def __init__(self, target_key, model, rank, device, dump_path, target_scale_offset=0, target_scale_factor=1, scale_per_pe=None):
+    def __init__(self, target_key, model, rank, device, dump_path, target_scale_offset=0, target_scale_factor=1, scale_per_pe=None, channels_last=False, max_grad_norm=None):
         """
         Parameters
         ==========
@@ -51,7 +54,7 @@ class RegressionEngine(ReconstructionEngine):
             Scale factor to divide target values by when calculating the loss, or dict of scale factors for each target
         """
         # create the directory for saving the log and dump files
-        super().__init__(target_key, model, rank, device, dump_path)
+        super().__init__(target_key, model, rank, device, dump_path, channels_last, max_grad_norm)
         if isinstance(self.target_key, str):
             self.target_key = [self.target_key]
         self.target_sizes = None

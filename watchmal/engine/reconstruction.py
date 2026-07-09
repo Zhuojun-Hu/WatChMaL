@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 
 class ReconstructionEngine(ABC):
-    def __init__(self, target_key, model, rank, device, dump_path):
+    def __init__(self, target_key, model, rank, device, dump_path, channels_last=False, max_grad_norm=None):
         """
         Parameters
         ==========
@@ -51,6 +51,14 @@ class ReconstructionEngine(ABC):
         self.model = model
         self.device = torch.device(device)
         self.target_key = target_key
+        self.channels_last = channels_last
+        self.max_grad_norm = max_grad_norm
+
+        self.has_batchnorm = False
+        for module in self.model.modules():
+            if isinstance(module, torch.nn.BatchNorm2d):
+                self.has_batchnorm = True
+                break
 
         # Automatic Mixed Precision
         self.amp_dtype = None
@@ -169,12 +177,24 @@ class ReconstructionEngine(ABC):
                 global_metric_dict[name] = tensor.item()
         return global_metric_dict
 
+    def sync_batchnorm_stats(self):
+        for m in self.model.modules():
+            if isinstance(m, torch.nn.BatchNorm2d):
+                torch.distributed.all_reduce(m.running_mean, op=torch.distributed.ReduceOp.AVG)
+                torch.distributed.all_reduce(m.running_var, op=torch.distributed.ReduceOp.AVG)
+
     def process_data(self, data):
         """Extract the event data from the input data dict"""
         if isinstance(data['data'], (list, tuple)):
-            self.data = type(data['data'])(d.to(self.device) for d in data['data'])
+            if self.channels_last:
+                self.data = type(data['data'])(d.to(self.device, memory_format=torch.channels_last) for d in data['data'])
+            else:
+                self.data = type(data['data'])(d.to(self.device) for d in data['data'])
         else: 
-            self.data = data['data'].to(self.device)
+            if self.channels_last:
+                self.data = data['data'].to(self.device, memory_format=torch.channels_last)
+            else:
+                self.data = data['data'].to(self.device)
 
     @abstractmethod
     def process_target(self, data):
@@ -223,11 +243,16 @@ class ReconstructionEngine(ABC):
         if self.amp_dtype is not None and self.scaler is not None:
             self.scaler.scale(self.loss).backward()
             previous_scale = self.scaler.get_scale()
+            if self.max_grad_norm is not None:
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.module.parameters(), max_norm=self.max_grad_norm)
             self.scaler.step(self.optimizer)
             self.scaler.update()
             optimizer_was_updated = self.scaler.get_scale() >= previous_scale
         else:
             self.loss.backward()
+            if self.max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.module.parameters(), max_norm=self.max_grad_norm)
             self.optimizer.step()
             optimizer_was_updated = True
         return optimizer_was_updated
@@ -331,6 +356,9 @@ class ReconstructionEngine(ABC):
         checkpointing : bool
             Whether to save the current state to disk.
         """
+        if self.is_distributed and self.has_batchnorm:
+            self.sync_batchnorm_stats()
+
         # set model to eval mode
         self.model.eval()
 
@@ -381,6 +409,8 @@ class ReconstructionEngine(ABC):
         """"""
         log.info(f"{'Evaluating' if with_metrics else 'Predicting'}, output to directory: {self.dump_path}")
 
+        if self.is_distributed and self.has_batchnorm:
+            self.sync_batchnorm_stats()
         with torch.no_grad():
             self.model.eval()
             start_time = datetime.now()
