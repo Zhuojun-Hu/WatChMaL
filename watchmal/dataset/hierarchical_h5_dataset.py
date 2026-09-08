@@ -29,6 +29,8 @@ class HierarchicalH5Dataset(Dataset, ABC):
     - tube_ids: array of int (variable length)
     - pmt_charge: array of float (variable length)
     - pmt_time: array of float (variable length)
+    
+    Output format matches H5CommonDataset/H5Dataset for compatibility with CNNDataset.
     """
     
     def __init__(self, file_pattern, pmt_positions_file, use_memmap=False, one_indexed=False, 
@@ -313,6 +315,8 @@ class HierarchicalH5Dataset(Dataset, ABC):
         """
         Get a ring sample by index.
         
+        Returns dict in same format as H5Dataset.__getitem__(), compatible with CNNDataset.
+        
         Parameters
         ----------
         idx: int
@@ -321,7 +325,9 @@ class HierarchicalH5Dataset(Dataset, ABC):
         Returns
         -------
         dict
-            Dictionary containing ring data ready for CNN processing (compatible with CNNDataset format)
+            Dictionary containing targets (energies, labels, positions, angles) and indices.
+            Instance variables event_hit_pmts, event_hit_charges, event_hit_times are set
+            for use by CNNDataset.process_data().
         """
         file_idx, event_id, ring_id = self.ring_index[idx]
         
@@ -340,18 +346,14 @@ class HierarchicalH5Dataset(Dataset, ABC):
             self.event_hit_charges = self.event_hit_charges[mask]
             self.event_hit_times = self.event_hit_times[mask]
         
-        # Build output dict with targets in format matching H5CommonDataset
+        # Build output dict matching H5CommonDataset format
+        # Only include target keys and indices (no metadata)
         data_dict = {
             'energies': processed_data['energies'],
             'labels': processed_data['labels'],
             'positions': processed_data['positions'],
             'angles': processed_data['angles'],
+            'indices': idx,
         }
-        
-        # Add metadata
-        data_dict['file_idx'] = file_idx
-        data_dict['event_id'] = event_id
-        data_dict['ring_id'] = ring_id
-        data_dict['indices'] = idx
         
         return data_dict
