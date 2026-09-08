@@ -55,7 +55,8 @@ data:
     # These two come with the models - do not substitute another geometry.
     geometry_file: /sps/hyperk/common/resnet_hkfd_jun26_modelcards/geometry/HK_HybridmPMT_WithOD_Realistic_geo_dump.npz
     pmt_positions_file: /sps/hyperk/common/resnet_hkfd_jun26_modelcards/geometry/HK_HybridmPMT_WithOD_Realistic_mapping_squashed.npz
-
+    one_indexed: True # In input files from Mathias, PMT IDs begin from 1. 
+    
 hydra:
   run:
     dir: ./outputs/${hydra.job.config_name}/${now:%Y-%m-%d}_${now:%H-%M-%S.%f}
