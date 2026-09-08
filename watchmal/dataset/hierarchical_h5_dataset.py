@@ -7,6 +7,7 @@ import numpy as np
 from pathlib import Path
 from glob import glob
 from torch.utils.data import Dataset
+from torch import from_numpy
 from abc import ABC
 
 
@@ -38,7 +39,7 @@ class HierarchicalH5Dataset(Dataset, ABC):
                  use_times=True, use_charges=True, use_isHit=False, use_positions=False,
                  use_orientations=False, geometry_file=None, use_invalid_value=False,
                  use_median_unhit_times=False, use_log_charge=False, use_padding=False,
-                 padding_to_fixed_dimension=None):
+                 padding_to_fixed_dimension=None, transforms=None):
         """
         Initialize the hierarchical HDF5 dataset.
         
@@ -81,6 +82,8 @@ class HierarchicalH5Dataset(Dataset, ABC):
             Whether to pad the data to a fixed dimension (default: False).
         padding_to_fixed_dimension: list of int
             If use_padding is True, this specifies the fixed dimension to which the data will be padded.
+        transforms: list
+            List of random transforms to apply to data for data augmentation.
         """
         self.file_pattern = file_pattern
         self.use_memmap = use_memmap
@@ -119,6 +122,9 @@ class HierarchicalH5Dataset(Dataset, ABC):
             self.real_3Dorientations = np.load(geometry_file)["orientation"]
         else:
             self.real_3Dorientations = None
+        
+        # Transformations for data augmentation
+        self.transforms = transforms if transforms is not None else []
         
         # Find all matching HDF5 files
         self.h5_files = sorted(glob(file_pattern))
