@@ -30,7 +30,7 @@ class HierarchicalH5Dataset(Dataset, ABC):
     - pmt_time: array of float (variable length)
     """
     
-    def __init__(self, file_pattern, use_memmap=False):
+    def __init__(self, file_pattern, pmt_positions_file, use_memmap=False, one_indexed=False):
         """
         Initialize the hierarchical HDF5 dataset.
         
@@ -38,11 +38,21 @@ class HierarchicalH5Dataset(Dataset, ABC):
         ----------
         file_pattern: str
             Glob pattern matching HDF5 files (e.g., "/path/batch_*/segmented_rings_260831.h5")
+        pmt_positions_file: str
+            Location of an npz file containing the mapping from PMT IDs to CNN image pixel locations
         use_memmap: bool
             Whether to use memory mapping (not applicable for hierarchical structure, kept for API compatibility)
+        one_indexed: bool
+            Whether the PMT IDs in the H5 file are indexed starting at 1 (like SK tube numbers) or 0 (like WCSim PMT
+            indexes). By default, zero-indexing is assumed.
         """
         self.file_pattern = file_pattern
         self.use_memmap = use_memmap
+        self.one_indexed = one_indexed
+        
+        # Load PMT positions mapping
+        self.pmt_positions = np.load(pmt_positions_file)["pmt_image_positions"].astype(int)
+        self.data_size = np.array([np.max(self.pmt_positions, axis=0) + 1], dtype=int).flatten()
         
         # Find all matching HDF5 files
         self.h5_files = sorted(glob(file_pattern))
@@ -136,6 +146,96 @@ class HierarchicalH5Dataset(Dataset, ABC):
             
             return data_dict
     
+    def _convert_event_type_to_label(self, event_type):
+        """
+        Convert event_type to labels.
+        
+        Parameters
+        ----------
+        event_type: int
+            Event type code (11, 13, etc.)
+        
+        Returns
+        -------
+        int
+            Label (0, 1, 2, etc.)
+        """
+        if event_type == 11:
+            return 1  # electron
+        elif event_type == 13:
+            return 2  # muon
+        else:
+            return 0  # gamma or unknown
+    
+    def _convert_direction_to_angles(self, direction_vector):
+        """
+        Convert 3D direction vector to zenith and azimuth angles.
+        
+        Parameters
+        ----------
+        direction_vector: ndarray of shape (3,)
+            Direction vector [x, y, z]
+        
+        Returns
+        -------
+        ndarray of shape (2,)
+            Angles [zenith, azimuth] in radians
+        
+        Notes
+        -----
+        Conversion follows watchmal.utils.math conventions:
+        - zenith = arccos(z)  # Polar angle from z-axis
+        - azimuth = atan2(y, x)  # Azimuth angle in xy-plane
+        
+        Returns angles in order [zenith, azimuth] to match direction_from_angles() 
+        and angles_from_direction() in watchmal.utils.math
+        """
+        dx, dy, dz = direction_vector
+        
+        # Compute zenith angle (with clipping to avoid numerical errors)
+        zenith = np.arccos(np.clip(dz, -1.0, 1.0))
+        
+        # Compute azimuth angle
+        azimuth = np.arctan2(dy, dx)
+        
+        return np.array([zenith, azimuth], dtype=np.float32)
+    
+    def process_data(self, ring_data):
+        """
+        Convert ring data to normalized format matching CNNDataset structure.
+        
+        Parameters
+        ----------
+        ring_data: dict
+            Dictionary containing raw ring data
+        
+        Returns
+        -------
+        dict
+            Dictionary with converted and normalized data
+        """
+        processed = {}
+        
+        # 1. Energy (direct)
+        processed['energy'] = np.array([ring_data['energy']], dtype=np.float32)
+        
+        # 2. Convert event_type to labels
+        processed['label'] = np.array([self._convert_event_type_to_label(ring_data['event_type'])], dtype=np.int32)
+        
+        # 3. Position (particle_start -> positions)
+        processed['position'] = ring_data['particle_start'].reshape(1, 1, 3).astype(np.float32)
+        
+        # 4. Convert direction to angles [zenith, azimuth]
+        processed['angles'] = self._convert_direction_to_angles(ring_data['particle_dir']).reshape(1, 2).astype(np.float32)
+        
+        # 5-7. Hit data (direct mapping)
+        processed['hit_pmt'] = ring_data['tube_ids']
+        processed['hit_charge'] = ring_data['pmt_charge']
+        processed['hit_time'] = ring_data['pmt_time']
+        processed['n_hits'] = ring_data['n_hits']
+        
+        return processed
+    
     def __len__(self):
         """Return total number of rings (samples) in the dataset."""
         return len(self.ring_index)
@@ -156,15 +256,13 @@ class HierarchicalH5Dataset(Dataset, ABC):
         """
         file_idx, event_id, ring_id = self.ring_index[idx]
         
-        data_dict = self._load_ring_data(file_idx, event_id, ring_id)
+        ring_data = self._load_ring_data(file_idx, event_id, ring_id)
+        processed_data = self.process_data(ring_data)
         
         # Add metadata
-        data_dict['file_idx'] = file_idx
-        data_dict['event_id'] = event_id
-        data_dict['ring_id'] = ring_id
-        data_dict['index'] = idx
+        processed_data['file_idx'] = file_idx
+        processed_data['event_id'] = event_id
+        processed_data['ring_id'] = ring_id
+        processed_data['index'] = idx
         
-        # TODO: Add conversion logic here (e.g., to CNN format)
-        # processed_data = self.process_data(data_dict)
-        
-        return data_dict
+        return processed_data
