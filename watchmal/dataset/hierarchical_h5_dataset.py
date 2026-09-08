@@ -13,6 +13,7 @@ from abc import ABC
 class HierarchicalH5Dataset(Dataset, ABC):
     """
     Dataset class for loading ring-based data from hierarchical HDF5 files.
+    Compatible with CNNDataset interface for training and evaluation.
     
     Each HDF5 file contains multiple events, and each event contains multiple rings.
     Each ring is treated as a separate sample.
@@ -30,7 +31,12 @@ class HierarchicalH5Dataset(Dataset, ABC):
     - pmt_time: array of float (variable length)
     """
     
-    def __init__(self, file_pattern, pmt_positions_file, use_memmap=False, one_indexed=False):
+    def __init__(self, file_pattern, pmt_positions_file, use_memmap=False, one_indexed=False, 
+                 mask_pmts=None, channel_scale_factor=None, channel_scale_offset=None,
+                 use_times=True, use_charges=True, use_isHit=False, use_positions=False,
+                 use_orientations=False, geometry_file=None, use_invalid_value=False,
+                 use_median_unhit_times=False, use_log_charge=False, use_padding=False,
+                 padding_to_fixed_dimension=None):
         """
         Initialize the hierarchical HDF5 dataset.
         
@@ -45,14 +51,72 @@ class HierarchicalH5Dataset(Dataset, ABC):
         one_indexed: bool
             Whether the PMT IDs in the H5 file are indexed starting at 1 (like SK tube numbers) or 0 (like WCSim PMT
             indexes). By default, zero-indexing is assumed.
+        mask_pmts: list of int
+            List of PMT IDs to mask out from all data (None by default)
+        channel_scale_factor: dict of float
+            Dictionary with keys corresponding to channels and values contain the factors to divide that channel.
+        channel_scale_offset: dict of float
+            Dictionary with keys corresponding to channels and values contain the offsets to subtract from that channel.
+        use_times: bool
+            Whether to use PMT hit times as one of the initial CNN image channels. True by default.
+        use_charges: bool
+            Whether to use PMT hit charges as one of the initial CNN image channels. True by default.
+        use_isHit: bool
+            Whether to use a channel to tag the PMT hit or not.
+        use_positions: bool
+            Whether to use three channels to add the real positions info of PMTs.
+        use_orientations: bool
+            Whether to use three channels to add the real orientations info of PMTs.
+        geometry_file: string
+            Location of an npz file containing the real positions and orientations info.
+        use_invalid_value: bool
+            Whether to set all the channel of unhit as an invalid value (like -100).
+        use_median_unhit_times: bool
+            Whether to set unhit times to the median value of the normalised hit times
+        use_log_charge: bool
+            Whether to logarithmically transform the charge.
+        use_padding: bool
+            Whether to pad the data to a fixed dimension (default: False).
+        padding_to_fixed_dimension: list of int
+            If use_padding is True, this specifies the fixed dimension to which the data will be padded.
         """
         self.file_pattern = file_pattern
         self.use_memmap = use_memmap
         self.one_indexed = one_indexed
+        self.mask_pmts = mask_pmts
+        
+        # Channel configuration (for CNN processing compatibility)
+        self.use_times = use_times
+        self.use_charges = use_charges
+        self.use_isHit = use_isHit
+        self.use_positions = use_positions
+        self.use_orientations = use_orientations
+        self.use_invalid_value = use_invalid_value
+        self.use_median_unhit_times = use_median_unhit_times
+        self.use_log_charge = use_log_charge
+        
+        if channel_scale_offset is None:
+            channel_scale_offset = {}
+        self.scale_offset = channel_scale_offset
+        if channel_scale_factor is None:
+            channel_scale_factor = {}
+        self.scale_factor = channel_scale_factor
         
         # Load PMT positions mapping
         self.pmt_positions = np.load(pmt_positions_file)["pmt_image_positions"].astype(int)
-        self.data_size = np.array([np.max(self.pmt_positions, axis=0) + 1], dtype=int).flatten()
+        self.data_size = np.max(self.pmt_positions, axis=0) + 1
+        if use_padding and padding_to_fixed_dimension is not None:
+            self.data_size = np.array(padding_to_fixed_dimension)
+        
+        # Geometry data (optional)
+        if use_positions and geometry_file:
+            self.real_3Dpositions = np.load(geometry_file)["position"]
+        else:
+            self.real_3Dpositions = None
+        if use_orientations and geometry_file:
+            self.real_3Dorientations = np.load(geometry_file)["orientation"]
+        else:
+            self.real_3Dorientations = None
         
         # Find all matching HDF5 files
         self.h5_files = sorted(glob(file_pattern))
@@ -66,6 +130,11 @@ class HierarchicalH5Dataset(Dataset, ABC):
         self._build_ring_index()
         
         print(f"Total rings (samples): {len(self.ring_index)}")
+        
+        # Instance variables for hit data (set during __getitem__)
+        self.event_hit_pmts = None
+        self.event_hit_charges = None
+        self.event_hit_times = None
     
     def _build_ring_index(self):
         """
@@ -202,7 +271,7 @@ class HierarchicalH5Dataset(Dataset, ABC):
     
     def process_data(self, ring_data):
         """
-        Convert ring data to normalized format matching CNNDataset structure.
+        Convert ring data to normalized format matching H5CommonDataset structure.
         
         Parameters
         ----------
@@ -212,23 +281,23 @@ class HierarchicalH5Dataset(Dataset, ABC):
         Returns
         -------
         dict
-            Dictionary with converted and normalized data
+            Dictionary with converted and normalized data in format matching CNNDataset
         """
         processed = {}
         
-        # 1. Energy (direct)
-        processed['energy'] = np.array([ring_data['energy']], dtype=np.float32)
+        # 1. Energy (direct) - shape (1,) to match H5CommonDataset format
+        processed['energies'] = np.array([ring_data['energy']], dtype=np.float32)
         
-        # 2. Convert event_type to labels
-        processed['label'] = np.array([self._convert_event_type_to_label(ring_data['event_type'])], dtype=np.int32)
+        # 2. Convert event_type to labels - shape (1,)
+        processed['labels'] = np.array([self._convert_event_type_to_label(ring_data['event_type'])], dtype=np.int32)
         
-        # 3. Position (particle_start -> positions)
-        processed['position'] = ring_data['particle_start'].reshape(1, 1, 3).astype(np.float32)
+        # 3. Position (particle_start -> positions) - shape (1, 1, 3)
+        processed['positions'] = ring_data['particle_start'].reshape(1, 1, 3).astype(np.float32)
         
-        # 4. Convert direction to angles [zenith, azimuth]
+        # 4. Convert direction to angles [zenith, azimuth] - shape (1, 2)
         processed['angles'] = self._convert_direction_to_angles(ring_data['particle_dir']).reshape(1, 2).astype(np.float32)
         
-        # 5-7. Hit data (direct mapping)
+        # 5-7. Hit data (direct mapping) - keep as arrays for processing
         processed['hit_pmt'] = ring_data['tube_ids']
         processed['hit_charge'] = ring_data['pmt_charge']
         processed['hit_time'] = ring_data['pmt_time']
@@ -252,17 +321,37 @@ class HierarchicalH5Dataset(Dataset, ABC):
         Returns
         -------
         dict
-            Dictionary containing ring data ready for conversion/training
+            Dictionary containing ring data ready for CNN processing (compatible with CNNDataset format)
         """
         file_idx, event_id, ring_id = self.ring_index[idx]
         
         ring_data = self._load_ring_data(file_idx, event_id, ring_id)
         processed_data = self.process_data(ring_data)
         
-        # Add metadata
-        processed_data['file_idx'] = file_idx
-        processed_data['event_id'] = event_id
-        processed_data['ring_id'] = ring_id
-        processed_data['index'] = idx
+        # Set instance variables for hit data (used by CNN processing)
+        self.event_hit_pmts = processed_data['hit_pmt']
+        self.event_hit_charges = processed_data['hit_charge']
+        self.event_hit_times = processed_data['hit_time']
         
-        return processed_data
+        # Apply PMT masking if specified
+        if self.mask_pmts is not None:
+            mask = np.isin(self.event_hit_pmts, self.mask_pmts, invert=True)
+            self.event_hit_pmts = self.event_hit_pmts[mask]
+            self.event_hit_charges = self.event_hit_charges[mask]
+            self.event_hit_times = self.event_hit_times[mask]
+        
+        # Build output dict with targets in format matching H5CommonDataset
+        data_dict = {
+            'energies': processed_data['energies'],
+            'labels': processed_data['labels'],
+            'positions': processed_data['positions'],
+            'angles': processed_data['angles'],
+        }
+        
+        # Add metadata
+        data_dict['file_idx'] = file_idx
+        data_dict['event_id'] = event_id
+        data_dict['ring_id'] = ring_id
+        data_dict['indices'] = idx
+        
+        return data_dict
