@@ -20,7 +20,7 @@ from watchmal.dataset.data_utils import get_data_loader
 from watchmal.utils.logging_utils import CSVLog
 
 # AMP imports
-from torch.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler, autocast
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ class ReconstructionEngine(ABC):
                 self.amp_dtype = torch.bfloat16
             elif amp_dtype == "fp16":
                 self.amp_dtype = torch.float16
-                self.scaler = GradScaler("cuda")
+                self.scaler = GradScaler()
         if self.rank == 0:
             log.info(f"AMP enabled: {amp_dtype}")
 
@@ -230,7 +230,7 @@ class ReconstructionEngine(ABC):
             Dictionary containing loss and other metrics
         """
         with torch.set_grad_enabled(train):
-            with autocast(device_type=self.device.type, enabled=self.amp_dtype is not None, dtype=self.amp_dtype):
+            with autocast(enabled=self.amp_dtype is not None, dtype=self.amp_dtype):
                 outputs = self.forward_pass()
                 if not with_metrics:
                     return outputs
